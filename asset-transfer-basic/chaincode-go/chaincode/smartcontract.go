@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/hyperledger/fabric-chaincode-go/v2/pkg/cid"
 	"github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
 )
 
@@ -13,64 +14,61 @@ type SmartContract struct {
 }
 
 // Asset describes basic details of what makes up a simple asset
-// Insert struct field in alphabetic order => to achieve determinism across languages
-// golang keeps the order when marshal to json but doesn't order automatically
 type Asset struct {
-	AppraisedValue int    `json:"AppraisedValue"`
-	Color          string `json:"Color"`
 	ID             string `json:"ID"`
-	Owner          string `json:"Owner"`
+	Color          string `json:"Color"`
 	Size           int    `json:"Size"`
+	Owner          string `json:"Owner"`
+	AppraisedValue int    `json:"AppraisedValue"`
+	OwnerOrg       string `json:"OwnerOrg"` // org that created/owns the asset
 }
 
-// InitLedger adds a base set of assets to the ledger
-func (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface) error {
-	assets := []Asset{
-		{ID: "asset1", Color: "blue", Size: 5, Owner: "Tomoko", AppraisedValue: 300},
-		{ID: "asset2", Color: "red", Size: 5, Owner: "Brad", AppraisedValue: 400},
-		{ID: "asset3", Color: "green", Size: 10, Owner: "Jin Soo", AppraisedValue: 500},
-		{ID: "asset4", Color: "yellow", Size: 10, Owner: "Max", AppraisedValue: 600},
-		{ID: "asset5", Color: "black", Size: 15, Owner: "Adriana", AppraisedValue: 700},
-		{ID: "asset6", Color: "white", Size: 15, Owner: "Michel", AppraisedValue: 800},
+// ===== helper: caller identity =====
+
+func getClientMSPID(ctx contractapi.TransactionContextInterface) (string, error) {
+	mspid, err := cid.GetMSPID(ctx.GetStub())
+	if err != nil {
+		return "", fmt.Errorf("failed to get client MSPID: %w", err)
 	}
-
-	for _, asset := range assets {
-		assetJSON, err := json.Marshal(asset)
-		if err != nil {
-			return err
-		}
-
-		err = ctx.GetStub().PutState(asset.ID, assetJSON)
-		if err != nil {
-			return fmt.Errorf("failed to put to world state. %v", err)
-		}
-	}
-
-	return nil
+	return mspid, nil
 }
 
-// CreateAsset issues a new asset to the world state with given details.
+func isClientAdmin(ctx contractapi.TransactionContextInterface) (bool, error) {
+	// With Fabric CA/MSP, admin certs have attribute hf.Type=admin
+	val, ok, err := cid.GetAttributeValue(ctx.GetStub(), "hf.Type")
+	if err != nil {
+		return false, err
+	}
+	return ok && val == "admin", nil
+}
+
+// ===== CRUD & queries =====
+
+// CreateAsset issues a new asset to the world state.
 func (s *SmartContract) CreateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, owner string, appraisedValue int) error {
 	exists, err := s.AssetExists(ctx, id)
 	if err != nil {
 		return err
 	}
 	if exists {
-		return fmt.Errorf("the asset %s already exists", id)
+		return fmt.Errorf("asset %s already exists", id)
 	}
-
+	mspid, err := getClientMSPID(ctx)
+	if err != nil {
+		return err
+	}
 	asset := Asset{
 		ID:             id,
 		Color:          color,
 		Size:           size,
 		Owner:          owner,
 		AppraisedValue: appraisedValue,
+		OwnerOrg:       mspid,
 	}
 	assetJSON, err := json.Marshal(asset)
 	if err != nil {
 		return err
 	}
-
 	return ctx.GetStub().PutState(id, assetJSON)
 }
 
@@ -78,97 +76,81 @@ func (s *SmartContract) CreateAsset(ctx contractapi.TransactionContextInterface,
 func (s *SmartContract) ReadAsset(ctx contractapi.TransactionContextInterface, id string) (*Asset, error) {
 	assetJSON, err := ctx.GetStub().GetState(id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read from world state: %v", err)
+		return nil, fmt.Errorf("failed to read asset %s: %w", id, err)
 	}
 	if assetJSON == nil {
-		return nil, fmt.Errorf("the asset %s does not exist", id)
+		return nil, fmt.Errorf("asset %s does not exist", id)
 	}
-
 	var asset Asset
-	err = json.Unmarshal(assetJSON, &asset)
-	if err != nil {
+	if err := json.Unmarshal(assetJSON, &asset); err != nil {
 		return nil, err
 	}
-
 	return &asset, nil
 }
 
-// UpdateAsset updates an existing asset in the world state with provided parameters.
+// UpdateAsset updates an existing asset in the world state with matching id.
 func (s *SmartContract) UpdateAsset(ctx contractapi.TransactionContextInterface, id string, color string, size int, owner string, appraisedValue int) error {
+	if err := s.assertCanModify(ctx, id); err != nil {
+		return err
+	}
 	exists, err := s.AssetExists(ctx, id)
 	if err != nil {
 		return err
 	}
 	if !exists {
-		return fmt.Errorf("the asset %s does not exist", id)
+		return fmt.Errorf("asset %s does not exist", id)
 	}
-
-	// overwriting original asset with new asset
+	// preserve OwnerOrg (ownership org)
+	cur, _ := s.ReadAsset(ctx, id)
 	asset := Asset{
 		ID:             id,
 		Color:          color,
 		Size:           size,
 		Owner:          owner,
 		AppraisedValue: appraisedValue,
+		OwnerOrg:       cur.OwnerOrg,
 	}
 	assetJSON, err := json.Marshal(asset)
 	if err != nil {
 		return err
 	}
-
 	return ctx.GetStub().PutState(id, assetJSON)
 }
 
 // DeleteAsset deletes an given asset from the world state.
 func (s *SmartContract) DeleteAsset(ctx contractapi.TransactionContextInterface, id string) error {
+	if err := s.assertCanModify(ctx, id); err != nil {
+		return err
+	}
 	exists, err := s.AssetExists(ctx, id)
 	if err != nil {
 		return err
 	}
 	if !exists {
-		return fmt.Errorf("the asset %s does not exist", id)
+		return fmt.Errorf("asset %s does not exist", id)
 	}
-
 	return ctx.GetStub().DelState(id)
 }
 
-// AssetExists returns true when asset with given ID exists in world state
-func (s *SmartContract) AssetExists(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
-	assetJSON, err := ctx.GetStub().GetState(id)
-	if err != nil {
-		return false, fmt.Errorf("failed to read from world state: %v", err)
+// TransferAsset updates the owner field of asset with given id.
+func (s *SmartContract) TransferAsset(ctx contractapi.TransactionContextInterface, id string, newOwner string) error {
+	if err := s.assertCanModify(ctx, id); err != nil {
+		return err
 	}
-
-	return assetJSON != nil, nil
-}
-
-// TransferAsset updates the owner field of asset with given id in world state, and returns the old owner.
-func (s *SmartContract) TransferAsset(ctx contractapi.TransactionContextInterface, id string, newOwner string) (string, error) {
 	asset, err := s.ReadAsset(ctx, id)
 	if err != nil {
-		return "", err
+		return err
 	}
-
-	oldOwner := asset.Owner
 	asset.Owner = newOwner
-
 	assetJSON, err := json.Marshal(asset)
 	if err != nil {
-		return "", err
+		return err
 	}
-
-	err = ctx.GetStub().PutState(id, assetJSON)
-	if err != nil {
-		return "", err
-	}
-
-	return oldOwner, nil
+	return ctx.GetStub().PutState(id, assetJSON)
 }
 
-// GetAllAssets returns all assets found in world state
+// GetAllAssets returns all assets found in world state.
 func (s *SmartContract) GetAllAssets(ctx contractapi.TransactionContextInterface) ([]*Asset, error) {
-	// range query with empty string for startKey and endKey does an
-	// open-ended query of all assets in the chaincode namespace.
 	resultsIterator, err := ctx.GetStub().GetStateByRange("", "")
 	if err != nil {
 		return nil, err
@@ -181,14 +163,78 @@ func (s *SmartContract) GetAllAssets(ctx contractapi.TransactionContextInterface
 		if err != nil {
 			return nil, err
 		}
-
 		var asset Asset
-		err = json.Unmarshal(queryResponse.Value, &asset)
-		if err != nil {
+		if err := json.Unmarshal(queryResponse.Value, &asset); err != nil {
 			return nil, err
 		}
 		assets = append(assets, &asset)
 	}
-
 	return assets, nil
+}
+
+// GetAssetHistory returns the history for a given asset id.
+func (s *SmartContract) GetAssetHistory(ctx contractapi.TransactionContextInterface, id string) ([]map[string]interface{}, error) {
+	iter, err := ctx.GetStub().GetHistoryForKey(id)
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var history []map[string]interface{}
+	for iter.HasNext() {
+		mod, err := iter.Next()
+		if err != nil {
+			return nil, err
+		}
+		var val Asset
+		if mod.Value != nil {
+			_ = json.Unmarshal(mod.Value, &val)
+		}
+		entry := map[string]interface{}{
+			"txId":      mod.TxId,
+			"isDelete":  mod.IsDelete,
+			"timestamp": mod.Timestamp,
+			"value":     val,
+		}
+		history = append(history, entry)
+	}
+	return history, nil
+}
+
+// AssetExists returns true when asset with given ID exists in world state
+func (s *SmartContract) AssetExists(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
+	assetJSON, err := ctx.GetStub().GetState(id)
+	if err != nil {
+		return false, fmt.Errorf("failed to read asset %s: %w", id, err)
+	}
+	return assetJSON != nil, nil
+}
+
+// ===== authorization guard =====
+
+// allow if (caller is admin) OR (caller MSPID == asset.OwnerOrg)
+func (s *SmartContract) assertCanModify(ctx contractapi.TransactionContextInterface, id string) error {
+	assetJSON, err := ctx.GetStub().GetState(id)
+	if err != nil {
+		return fmt.Errorf("failed to read asset %s: %w", id, err)
+	}
+	if assetJSON == nil {
+		return fmt.Errorf("asset %s does not exist", id)
+	}
+	var a Asset
+	if err := json.Unmarshal(assetJSON, &a); err != nil {
+		return fmt.Errorf("json unmarshal: %w", err)
+	}
+	mspid, err := getClientMSPID(ctx)
+	if err != nil {
+		return err
+	}
+	admin, err := isClientAdmin(ctx)
+	if err != nil {
+		return err
+	}
+	if admin || mspid == a.OwnerOrg {
+		return nil
+	}
+	return fmt.Errorf("access denied: client org %s not allowed to modify asset owned by %s", mspid, a.OwnerOrg)
 }
