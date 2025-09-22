@@ -1,18 +1,33 @@
-## Contributing
+# Fabric Access Control + Audit Extension
 
-We welcome contributions to the Hyperledger Fabric Project in many forms, and
-there's always plenty to do!
+This repository contains a modified version of the Hyperledger Fabric 
+`asset-transfer-basic` chaincode with the following extensions:
 
-Please visit the
-[contributors guide](http://hyperledger-fabric.readthedocs.io/en/latest/CONTRIBUTING.html) in the
-docs to learn how to make contributions to this exciting project.
+- **Access Control:** Introduces `OwnerOrg` field and `assertCanModify` logic 
+  so only the creating organization (or an admin) can update or delete an asset.
+- **Auditability:** Adds a `GetAssetHistory` function to retrieve the complete 
+  transaction history (including timestamps and TxIDs).
+- **Transparency:** Validated that peers across multiple organizations always 
+  return the same ledger state.
 
-## Code of Conduct Guidelines <a name="conduct"></a>
+## 🛠️ Pre-requisites
 
-See our [Code of Conduct Guidelines](./CODE_OF_CONDUCT.md).
+- **OS:** Windows 10 with WSL2 (Ubuntu 22.04)
+- **Tools:**
+  - Docker & Docker Compose
+  - Go (>=1.22.3)
+  - Node.js (>=v22)
+  - Git
+- **Fabric Binaries:** Place under `fabric-samples/bin` (peer, orderer, configtxgen, etc.)
 
-## Maintainers <a name="maintainers"></a>
+## 🚀 Setup Instructions
 
-Should you have any questions or concerns, please reach out to one of the project's [Maintainers](./MAINTAINERS.md).
+```bash
+# Bring network down if already running
+./network.sh down
 
-<a rel="license" href="http://creativecommons.org/licenses/by/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by/4.0/88x31.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by/4.0/">Creative Commons Attribution 4.0 International License</a>.
+# Start the network and create channel
+./network.sh up createChannel -ca
+
+# Deploy modified chaincode
+./network.sh deployCC -ccn basic -ccp ../asset-transfer-basic/chaincode-go -ccl go
