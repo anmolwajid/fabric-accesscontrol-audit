@@ -1,0 +1,1 @@
+Error: endorsement failure during invoke. response: status:500 message:"access denied: client org Org2MSP not allowed to read artifact owned by Org1MSP" 

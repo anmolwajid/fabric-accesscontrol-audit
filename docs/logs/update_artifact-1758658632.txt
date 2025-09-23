@@ -1,0 +1,3 @@
+[34m2025-09-24 01:21:32.021 PKT 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [81a84c0ac5f114b0a75a0a552b8f0546542fda33367bf1bede0a2601fe537a9c] committed with status (VALID) at localhost:9051
+[34m2025-09-24 01:21:32.022 PKT 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [81a84c0ac5f114b0a75a0a552b8f0546542fda33367bf1bede0a2601fe537a9c] committed with status (VALID) at localhost:7051
+[34m2025-09-24 01:21:32.022 PKT 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
